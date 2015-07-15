@@ -25,6 +25,7 @@ unsigned int delta=0;
 float moving_offset=8388608.0;
 bool tick_raw;
 bool tick_registered;
+bool new_code;
 
 unsigned int TIMER_GetSysTick()
 {	return TIMER_registers[1];	}
