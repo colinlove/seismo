@@ -12,11 +12,15 @@
 #include <math.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <parser.h>
 
 int uart0_filestream = -1;
 struct termios options;
 unsigned char fragment[255];
 int fragment_length=0;
+
+nmeaINFO info;
+nmeaPARSER parser;
 
 void setup(void){
 	//-------------------------
@@ -60,6 +64,11 @@ void setup(void){
 	options.c_lflag = 0;
 	tcflush(uart0_filestream, TCIFLUSH);
 	tcsetattr(uart0_filestream, TCSANOW, &options);
+
+    nmea_zero_INFO(&info);
+    nmea_parser_init(&parser);
+
+
 }
 
 bool checksum(unsigned char* s)
@@ -83,82 +92,23 @@ bool checksum(unsigned char* s)
 	}
 }
 
-void parse(unsigned char input_string[]){
-	const char delimiters[] = ",*";
-	char *running;
-	char *token;
-	double minutes,deg,speed;
-	
-	//printf("string: %s",input_string);
-	running = strdup ((char*)input_string);
-	token = strsep (&running, delimiters);
-	if (strcmp(token, "$GPRMC") == 0) 
-	{
-		printf("%s",input_string);
-		printf("Recommended Minimum Data:\n");
-		token = strsep (&running, delimiters);  
-		if (strlen(token)==10){
-			printf("Time: %c%c:%c%c:%c%c UTC\n",token[0],token[1],token[2],token[3],token[4],token[5]);
-		} else{
-			printf("Invalid Time Field Length\n");
-		}
-		token = strsep (&running, delimiters);  
-		if (*token=='A'){
-			printf("Status: Active\n");
-		} else if (*token=='V'){
-			printf("Status Void\n");
-		} else {
-			printf("Status Invalid");
-		}
+time_t get_time_t(nmeaTIME &nt) {
+	tm ct;
+	ct.tm_year = nt.year;
+	ct.tm_mon = nt.mon;
+	ct.tm_mday = nt.day;
+	ct.tm_hour = nt.hour;
+	ct.tm_min = nt.min;
+	ct.tm_sec = nt.sec;
+	return mktime(&ct) - timezone;
+}
 
-		minutes = atof(strsep (&running, delimiters));
-		deg = trunc(minutes/100);
-		minutes -=deg*100;
-		token = strsep (&running, delimiters);  
-		printf("Lat : %.0f deg %02.4f' %c\n",deg ,minutes,*token); 
- 
-		minutes = atof(strsep (&running, delimiters));
-		deg = trunc(minutes/100);
-		minutes -=deg*100;
-		token = strsep (&running, delimiters);  
-		printf("Long : %.0f deg %02.4f' %c\n",deg ,minutes,*token); 
+void print_details() {
+	time_t t1, t2;
+	t1 = get_time_t(info.utc);
+	t2 = time(NULL);
 
-		speed = atof(strsep (&running, delimiters));
-		deg = atof(strsep (&running, delimiters));
-		printf("Velocity: %3.2f knots at %3.2f deg True\n",speed,deg);
-
-		token = strsep (&running, delimiters);  
-		if (strlen(token)==6){
-			printf("Date: %c%c/%c%c/20%c%c\n",token[0],token[1],token[2],token[3],token[4],token[5]);
-		} else{
-			printf("Invalid Date Field Length\n");
-		}
-		token = strsep (&running, delimiters); //this gps unit will not have magnetic variation 
-		token = strsep (&running, delimiters); //this gps unit will not have magnetic variation 
-		token = strsep (&running, delimiters); // A=Autonomous D=differential, E=Estimated, N=not valid, S=Simulator
-		if (*token=='A'){
-			printf("Autonomous Fix\n");
-		} else if (*token=='D'){ 
-			printf("Differential Fix\n");
-		} else if (*token=='E'){ 
-			printf("Estimated Fix\n");
-		} else if (*token=='N'){ 
-			printf("Not Valid Fix\n");
-		} else if (*token=='S'){ 
-			printf("Simulator Fix\n");
-		} else {
-			printf("Invalid Fix Status\n");
-		}
-	} 
-	else if (strcmp(token, "xxx") == 0)
-	{
-		// do something else
-	}
-		/* more else if clauses */
-	else /* default: */
-	{
-		printf("  ?: %s",input_string);
-	}
+	printf("time %d-%d-%d %02d:%02d:%02d:%02d diff %d\n", info.utc.year+1900, info.utc.mon+1, info.utc.day+1, info.utc.hour, info.utc.min, info.utc.sec, info.utc.hsec, t1 - t2);
 }
 
 void receive(void){
@@ -186,8 +136,9 @@ void receive(void){
 				if (rx_buffer[i]==10){
 					fragment[fragment_length] = '\0';
 					if (checksum(fragment)){
-						parse(fragment);
+						nmea_parse(&parser, (char*)fragment, fragment_length, &info);
 						//printf("Valid - %s",fragment);
+						print_details();
 					}
 					fragment_length=0;
 				}
@@ -198,31 +149,20 @@ void receive(void){
 	}
 }
 
-void send(void){
-	//----- TX BYTES -----
-	unsigned char tx_buffer[20];
-	unsigned char *p_tx_buffer;
-	
-	p_tx_buffer = &tx_buffer[0];
-	*p_tx_buffer++ = 'H';
-	*p_tx_buffer++ = 'e';
-	*p_tx_buffer++ = 'l';
-	*p_tx_buffer++ = 'l';
-	*p_tx_buffer++ = 'o';
-	
+void send(const char *sendstring){
 	if (uart0_filestream != -1)
 	{
-		int count = write(uart0_filestream, &tx_buffer[0], (p_tx_buffer - &tx_buffer[0]));		//Filestream, bytes to write, number of bytes to write
-		if (count < 0)
-		{
-			printf("UART TX error\n");
-		}
+		int count = write(uart0_filestream, sendstring, strlen(sendstring));		//Filestream, bytes to write, number of bytes to write
+		if (count < 0) { printf("UART TX error\n"); }
 	}
 }
 
 int main(void){
 	setup();
-	delay(3);
+	delay(1);
+	send("$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*29\r\n"); // only send the RMC sentences
+	send("$PMTK300,200,0,0,0,0*2F\r\n"); // Increase update rate to 5Hz (200ms) for microstack GPS
+	send("$PMTK220,200*2C\r\n"); // Increase update rate to 5Hz (200ms) for adafruit GPS
 	while(1){
 		receive();
 	}

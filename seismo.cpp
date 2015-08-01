@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <sys/time.h>
 #include <time.h>
+#include <parser.h>
 
 #define BCM2708_ST_BASE 0x3F003000 /* BCM 2835 System Timer */
 #define GPS_PPS 4
@@ -26,6 +27,8 @@ float moving_offset=8388608.0;
 bool tick_raw;
 bool tick_registered;
 bool new_code;
+
+nmeaPARSER p;
 
 unsigned int TIMER_GetSysTick()
 {	return TIMER_registers[1];	}
